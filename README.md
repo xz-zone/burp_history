@@ -141,6 +141,4 @@ MIT 许可证（详见 LICENSE）。
 
 ## Stargazers over time
 
-[![Stargazers over time](https://starchart.cc/xz-zone/burp_history.svg)](https://starchart.cc/xz-zone/burp_history)
-
-<img align='right' src="https://profile-counter.glitch.me/burp_history/count.svg" width="200">
+[![Stargazers over time](https://starchart.cc/xz-zone/burp_history.svg?variant=adaptive)](https://starchart.cc/xz-zone/burp_history)
