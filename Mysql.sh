@@ -214,6 +214,28 @@ echo "MySQL连接测试成功！"
 # 生成随机密码
 RANDOM_PASSWORD=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 16 | head -n 1)
 
+# 保存密码到文件
+PASSWORD_FILE="/docker/mysql/passwords.txt"
+cat > $PASSWORD_FILE << EOF
+# Burp Traffic Recorder Mysql 密码文件
+# 生成时间: $(date)
+# 请妥善保管此文件！
+
+Burp Traffic Recorder 数据库用户密码: RANDOM_PASSWORD
+
+数据库连接信息:
+主机: localhost 或 服务器IP
+端口: 3306
+数据库: burp_monitor
+用户名: burp_user
+密码: RANDOM_PASSWORD
+
+EOF
+
+chmod 600 $PASSWORD_FILE
+
+echo "随机密码已生成并保存到: $PASSWORD_FILE"
+
 # 创建SQL文件 - 修复SQL语句，移除IF NOT EXISTS语法
 SQL_FILE="./initMysql.sql"
 
@@ -246,7 +268,9 @@ CREATE TABLE \`http_traffic\` (
     \`status_code\` INT,
     \`mime_type\` VARCHAR(100),
     \`is_complete\` BOOLEAN DEFAULT FALSE,
-    \`team_id\` VARCHAR(50)
+    \`team_id\` VARCHAR(50),
+    \`note\` VARCHAR(5),
+    \`api_hash\` VARCHAR(64)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 单独创建索引（不使用IF NOT EXISTS）
@@ -258,6 +282,7 @@ CREATE INDEX idx_status_code ON \`http_traffic\`(\`status_code\`);
 CREATE INDEX idx_is_complete ON \`http_traffic\`(\`is_complete\`);
 CREATE INDEX idx_tool_timestamp ON \`http_traffic\`(\`tool\`, \`timestamp\` DESC);
 CREATE INDEX idx_team_id ON \`http_traffic\`(\`team_id\`);
+CREATE INDEX idx_api_hash ON \`http_traffic\`(\`api_hash\`);
 
 -- 添加注释
 ALTER TABLE \`http_traffic\` COMMENT = 'HTTP流量监控数据表';

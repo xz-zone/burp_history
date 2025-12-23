@@ -356,7 +356,9 @@ EOF
         status_code INTEGER,
         mime_type VARCHAR(100),
         is_complete BOOLEAN DEFAULT FALSE,
-        team_id VARCHAR(50)
+        team_id VARCHAR(50),
+        note VARCHAR(5),
+        api_hash VARCHAR(64)
     );
 
     -- 创建性能索引（PostgreSQL支持IF NOT EXISTS语法）
@@ -368,6 +370,7 @@ EOF
     CREATE INDEX IF NOT EXISTS idx_is_complete ON http_traffic(is_complete);
     CREATE INDEX IF NOT EXISTS idx_tool_timestamp ON http_traffic(tool, timestamp DESC);
     CREATE INDEX IF NOT EXISTS idx_team_id ON http_traffic(team_id);
+    CREATE INDEX IF NOT EXISTS idx_api_hash ON http_traffic(api_hash);
 
     -- 授予表权限
     GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO burp_user;

@@ -147,6 +147,15 @@ The techniques, ideas, and tools mentioned in this document are intended **only*
 	Append the body hash to the base hash: apiKey+"|"+bodyHash
 	Finally calculate SHA-256 for the entire string
   ```
+### v1.0.3
+-  ✅  Add notes for each interface
+-  ✅  Add request packet and response packet search
+-  ✅  Add database configuration ->Display maximum number
+-  ✅  Optimize single machine mode, delete database, add prompt to delete database inquiry box
+-  ✅  Optimize right-click menu
+-  ✅  Optimize CSV export with remark fields
+-  ✅  Optimize domain name tree click query issues
+-  ✅  Optimizing context storage issues
 
 ## 📄 License
 
