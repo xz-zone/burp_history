@@ -157,6 +157,10 @@ The techniques, ideas, and tools mentioned in this document are intended **only*
 -  ✅  Optimize domain name tree click query issues
 -  ✅  Optimizing context storage issues
 
+### v1.0.4
+-  ✅  Add Advanced Query ->Time Filtering
+-  ✅  Optimize note input
+
 ## 📄 License
 
 MIT License (see LICENSE).
