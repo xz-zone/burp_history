@@ -161,6 +161,10 @@ The techniques, ideas, and tools mentioned in this document are intended **only*
 -  ✅  Add Advanced Query ->Time Filtering
 -  ✅  Optimize note input
 
+### v1.0.5
+-  ✅  Add encoding conversion
+-  ✅  Optimize caching mechanism and context retrieval port
+
 ## 📄 License
 
 MIT License (see LICENSE).
