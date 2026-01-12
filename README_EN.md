@@ -169,6 +169,10 @@ The techniques, ideas, and tools mentioned in this document are intended **only*
 -  ✅  Optimize configuration saving
 -  ✅  Optimize team mode database field issues
 
+### v1.0.7
+-  ✅  Added ability to select fields for CSV export
+-  ✅  Optimized to not force selection of time
+
 ## 📄 License
 
 MIT License (see LICENSE).
