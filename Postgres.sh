@@ -319,13 +319,92 @@ GRANT ALL PRIVILEGES ON DATABASE burp_monitor TO burp_user;
 EOF
 
     echo "创建数据库和用户..."
-    docker exec -i $PG_CONTAINER psql -U postgres < $SQL_FILE
+    echo "执行SQL文件: $SQL_FILE"
+    
+    # 执行SQL并捕获输出
+    SQL_OUTPUT=$(docker exec -i $PG_CONTAINER psql -U postgres < $SQL_FILE 2>&1)
+    SQL_EXIT_CODE=$?
+    
+    # 显示SQL执行输出（过滤掉NOTICE）
+    echo "$SQL_OUTPUT" | grep -v "NOTICE" | grep -v "^$" || true
+    
     rm -f $SQL_FILE
-
-    echo "数据库和用户创建完成"
-
-    # 等待一下确保数据库创建完成
-    sleep 2
+    
+    # 等待数据库创建完成
+    echo "等待数据库创建完成..."
+    sleep 3
+    
+    # 强制验证数据库是否存在（多次尝试）
+    DB_EXISTS=false
+    for i in {1..5}; do
+        if docker exec $PG_CONTAINER psql -U postgres -lqt 2>/dev/null | cut -d \| -f 1 | grep -qw burp_monitor; then
+            DB_EXISTS=true
+            break
+        fi
+        echo "   等待数据库创建... ($i/5)"
+        sleep 1
+    done
+    
+    # 验证用户是否存在
+    USER_EXISTS=false
+    if docker exec $PG_CONTAINER psql -U postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='burp_user'" 2>/dev/null | grep -q 1; then
+        USER_EXISTS=true
+    fi
+    
+    # 显示验证结果
+    echo ""
+    echo "验证结果:"
+    if [ "$DB_EXISTS" = true ]; then
+        echo "   ✓ 数据库 burp_monitor 已成功创建并验证存在"
+        # 显示数据库详细信息
+        docker exec $PG_CONTAINER psql -U postgres -lqt | grep burp_monitor
+    else
+        echo "   ✗ 数据库 burp_monitor 创建失败或不存在！"
+        echo "   尝试手动创建..."
+        docker exec -i $PG_CONTAINER psql -U postgres << EOF
+CREATE DATABASE burp_monitor
+    ENCODING 'UTF8'
+    LC_COLLATE 'en_US.utf8'
+    LC_CTYPE 'en_US.utf8'
+    TEMPLATE template0;
+EOF
+        sleep 2
+        # 再次验证
+        if docker exec $PG_CONTAINER psql -U postgres -lqt 2>/dev/null | cut -d \| -f 1 | grep -qw burp_monitor; then
+            echo "   ✓ 数据库 burp_monitor 手动创建成功"
+            DB_EXISTS=true
+        else
+            echo "   ✗ 数据库创建仍然失败，请检查PostgreSQL日志"
+            docker logs $PG_CONTAINER --tail 20
+        fi
+    fi
+    
+    if [ "$USER_EXISTS" = true ]; then
+        echo "   ✓ 用户 burp_user 已成功创建并验证存在"
+    else
+        echo "   ✗ 用户 burp_user 创建失败或不存在！"
+        echo "   尝试手动创建..."
+        docker exec -i $PG_CONTAINER psql -U postgres << EOF
+CREATE USER burp_user WITH PASSWORD '$BURP_USER_PASSWORD';
+GRANT ALL PRIVILEGES ON DATABASE burp_monitor TO burp_user;
+EOF
+        sleep 1
+        # 再次验证
+        if docker exec $PG_CONTAINER psql -U postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='burp_user'" 2>/dev/null | grep -q 1; then
+            echo "   ✓ 用户 burp_user 手动创建成功"
+            USER_EXISTS=true
+        else
+            echo "   ✗ 用户创建仍然失败"
+        fi
+    fi
+    
+    if [ "$DB_EXISTS" = true ] && [ "$USER_EXISTS" = true ]; then
+        echo ""
+        echo "数据库和用户创建完成并验证成功"
+    else
+        echo ""
+        echo "警告：数据库或用户创建可能存在问题，但将继续执行..."
+    fi
 
     # 初始化表结构 - 使用优化的SQL
     echo "初始化表结构..."
@@ -385,69 +464,174 @@ fi
 
 # 验证数据库设置
 echo "验证数据库设置..."
-docker exec $PG_CONTAINER psql -U postgres -d burp_monitor -c "
--- 验证表创建
-SELECT '=== 数据库验证 ===' as status;
-SELECT '数据库: ' || current_database() as db_name;
-SELECT '用户: ' || current_user as current_user;
-SELECT '表数量: ' || count(*) as table_count FROM information_schema.tables WHERE table_schema = 'public';
 
--- 验证表结构
-SELECT
-    column_name,
-    data_type,
-    character_maximum_length,
-    is_nullable
-FROM information_schema.columns
-WHERE table_schema = 'public'
-    AND table_name = 'http_traffic'
-ORDER BY ordinal_position;
+# 首先检查数据库是否存在（使用多种方法验证）
+echo "1. 检查数据库是否存在..."
+DB_FOUND=false
 
--- 验证索引
-SELECT
-    indexname,
-    indexdef
-FROM pg_indexes
-WHERE tablename = 'http_traffic'
-    AND schemaname = 'public';
+# 方法1: 使用 psql -l
+if docker exec $PG_CONTAINER psql -U postgres -lqt 2>/dev/null | cut -d \| -f 1 | tr -d ' ' | grep -qw burp_monitor; then
+    DB_FOUND=true
+    echo "   ✓ 数据库 burp_monitor 存在（方法1验证）"
+fi
 
--- 测试插入
-INSERT INTO http_traffic (
-    id, timestamp, tool, host, port, protocol, method, url, path,
-    query_string, request_headers, request_body, request_length,
-    response_headers, response_body, response_length, status_code,
-    mime_type, is_complete, team_id
-) VALUES (
-    'test-' || md5(random()::text),
-    NOW(),
-    'Test',
-    'test.example.com',
-    80,
-    'http',
-    'GET',
-    'http://test.example.com/',
-    '/',
-    '',
-    '',
-    '',
-    0,
-    '',
-    '',
-    0,
-    200,
-    'text/html',
-    TRUE,
-    'test-team'
-);
+# 方法2: 使用 SQL 查询
+if docker exec $PG_CONTAINER psql -U postgres -tAc "SELECT 1 FROM pg_database WHERE datname='burp_monitor'" 2>/dev/null | grep -q 1; then
+    DB_FOUND=true
+    echo "   ✓ 数据库 burp_monitor 存在（方法2验证）"
+fi
 
--- 验证数据
-SELECT '插入测试数据成功' as test_result;
-SELECT count(*) as record_count FROM http_traffic;
+# 方法3: 尝试连接数据库
+if docker exec $PG_CONTAINER psql -U postgres -d burp_monitor -c "SELECT 1;" >/dev/null 2>&1; then
+    DB_FOUND=true
+    echo "   ✓ 数据库 burp_monitor 可以连接（方法3验证）"
+fi
 
--- 清理测试数据
-DELETE FROM http_traffic WHERE team_id = 'test-team';
-SELECT '清理测试数据完成' as cleanup_result;
-" 2>/dev/null || echo "注意: 数据库验证失败"
+if [ "$DB_FOUND" = false ]; then
+    echo "   ✗ 数据库 burp_monitor 不存在！"
+    echo "   显示所有数据库列表:"
+    docker exec $PG_CONTAINER psql -U postgres -l
+    echo ""
+    echo "   尝试重新创建数据库..."
+    docker exec -i $PG_CONTAINER psql -U postgres << EOF
+DROP DATABASE IF EXISTS burp_monitor;
+CREATE DATABASE burp_monitor
+    ENCODING 'UTF8'
+    LC_COLLATE 'en_US.utf8'
+    LC_CTYPE 'en_US.utf8'
+    TEMPLATE template0;
+GRANT ALL PRIVILEGES ON DATABASE burp_monitor TO burp_user;
+EOF
+    sleep 3
+    # 再次验证
+    if docker exec $PG_CONTAINER psql -U postgres -d burp_monitor -c "SELECT 1;" >/dev/null 2>&1; then
+        echo "   ✓ 数据库重新创建成功"
+        DB_FOUND=true
+    else
+        echo "   ✗ 数据库创建失败，请检查PostgreSQL日志:"
+        docker logs $PG_CONTAINER --tail 30
+    fi
+fi
+
+# 检查用户是否存在
+echo "2. 检查用户是否存在..."
+if docker exec $PG_CONTAINER psql -U postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='burp_user'" | grep -q 1; then
+    echo "   ✓ 用户 burp_user 存在"
+else
+    echo "   ✗ 用户 burp_user 不存在！"
+    echo "   尝试重新创建用户..."
+    docker exec -i $PG_CONTAINER psql -U postgres << EOF
+CREATE USER burp_user WITH PASSWORD '$BURP_USER_PASSWORD';
+GRANT ALL PRIVILEGES ON DATABASE burp_monitor TO burp_user;
+EOF
+fi
+
+# 验证数据库连接
+echo "3. 测试数据库连接..."
+if docker exec $PG_CONTAINER psql -U burp_user -d burp_monitor -c "SELECT 1;" >/dev/null 2>&1; then
+    echo "   ✓ 数据库连接成功"
+else
+    echo "   ✗ 数据库连接失败，尝试使用postgres用户连接..."
+    if docker exec $PG_CONTAINER psql -U postgres -d burp_monitor -c "SELECT 1;" >/dev/null 2>&1; then
+        echo "   ✓ 使用postgres用户连接成功"
+        echo "   重新授予权限..."
+        docker exec -i $PG_CONTAINER psql -U postgres -d burp_monitor << EOF
+GRANT ALL ON SCHEMA public TO burp_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO burp_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO burp_user;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO burp_user;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO burp_user;
+EOF
+    else
+        echo "   ✗ 数据库连接失败！"
+    fi
+fi
+
+# 验证表结构
+echo "4. 验证表结构..."
+TABLE_COUNT=$(docker exec $PG_CONTAINER psql -U postgres -d burp_monitor -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'http_traffic';" 2>/dev/null)
+if [ "$TABLE_COUNT" = "1" ]; then
+    echo "   ✓ 表 http_traffic 存在"
+    
+    # 检查表字段数量
+    COLUMN_COUNT=$(docker exec $PG_CONTAINER psql -U postgres -d burp_monitor -tAc "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'http_traffic';" 2>/dev/null)
+    echo "   ✓ 表包含 $COLUMN_COUNT 个字段"
+    
+    # 检查索引
+    INDEX_COUNT=$(docker exec $PG_CONTAINER psql -U postgres -d burp_monitor -tAc "SELECT count(*) FROM pg_indexes WHERE tablename = 'http_traffic' AND schemaname = 'public';" 2>/dev/null)
+    echo "   ✓ 表包含 $INDEX_COUNT 个索引"
+    
+    # 测试插入和删除
+    echo "5. 测试数据操作..."
+    TEST_ID="test-$(date +%s)"
+    if docker exec $PG_CONTAINER psql -U postgres -d burp_monitor -c "INSERT INTO http_traffic (id, timestamp, tool, host, port, protocol, method, url, path, is_complete) VALUES ('$TEST_ID', NOW(), 'Test', 'test.example.com', 80, 'http', 'GET', 'http://test.example.com/', '/', TRUE);" >/dev/null 2>&1; then
+        echo "   ✓ 插入测试数据成功"
+        if docker exec $PG_CONTAINER psql -U postgres -d burp_monitor -c "DELETE FROM http_traffic WHERE id = '$TEST_ID';" >/dev/null 2>&1; then
+            echo "   ✓ 删除测试数据成功"
+            echo ""
+            echo "=========================================="
+            echo "✓ 数据库验证成功！"
+            echo "=========================================="
+        else
+            echo "   ⚠ 删除测试数据失败（不影响使用）"
+        fi
+    else
+        echo "   ✗ 插入测试数据失败"
+        echo "   检查表结构..."
+        docker exec $PG_CONTAINER psql -U postgres -d burp_monitor -c "\d http_traffic" 2>&1 | head -20
+    fi
+else
+    echo "   ✗ 表 http_traffic 不存在！"
+    echo "   尝试重新创建表..."
+    docker exec -i $PG_CONTAINER psql -U postgres -d burp_monitor << 'EOF'
+    -- 授予模式权限
+    GRANT ALL ON SCHEMA public TO burp_user;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO burp_user;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO burp_user;
+
+    -- 创建HTTP流量记录表
+    CREATE TABLE IF NOT EXISTS http_traffic (
+        id VARCHAR(36) PRIMARY KEY,
+        timestamp TIMESTAMP NOT NULL,
+        tool VARCHAR(50) NOT NULL,
+        host VARCHAR(255) NOT NULL,
+        port INTEGER NOT NULL,
+        protocol VARCHAR(10) NOT NULL,
+        method VARCHAR(10) NOT NULL,
+        url TEXT NOT NULL,
+        path TEXT NOT NULL,
+        query_string TEXT,
+        request_headers TEXT,
+        request_body TEXT,
+        request_length INTEGER,
+        response_headers TEXT,
+        response_body TEXT,
+        response_length INTEGER,
+        status_code INTEGER,
+        mime_type VARCHAR(100),
+        is_complete BOOLEAN DEFAULT FALSE,
+        team_id VARCHAR(50),
+        note VARCHAR(5),
+        api_hash VARCHAR(64)
+    );
+
+    -- 创建索引
+    CREATE INDEX IF NOT EXISTS idx_timestamp ON http_traffic(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_tool ON http_traffic(tool);
+    CREATE INDEX IF NOT EXISTS idx_host ON http_traffic(host);
+    CREATE INDEX IF NOT EXISTS idx_method ON http_traffic(method);
+    CREATE INDEX IF NOT EXISTS idx_status_code ON http_traffic(status_code);
+    CREATE INDEX IF NOT EXISTS idx_is_complete ON http_traffic(is_complete);
+    CREATE INDEX IF NOT EXISTS idx_tool_timestamp ON http_traffic(tool, timestamp DESC);
+    CREATE INDEX IF NOT EXISTS idx_team_id ON http_traffic(team_id);
+    CREATE INDEX IF NOT EXISTS idx_api_hash ON http_traffic(api_hash);
+
+    -- 授予表权限
+    GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO burp_user;
+    GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO burp_user;
+EOF
+    echo "   表结构已重新创建"
+fi
 
 echo "=========================================="
 echo "PostgreSQL 部署完成！"
@@ -469,6 +653,37 @@ echo "────────────────────────�
 echo ""
 echo "容器状态:"
 docker ps --filter "name=$PG_CONTAINER" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+
+echo ""
+echo "=========================================="
+echo "最终验证：显示所有数据库列表"
+echo "=========================================="
+docker exec $PG_CONTAINER psql -U postgres -c "\l" 2>/dev/null || docker exec $PG_CONTAINER psql -U postgres -l
+
+echo ""
+echo "=========================================="
+echo "验证 burp_monitor 数据库"
+echo "=========================================="
+if docker exec $PG_CONTAINER psql -U postgres -d burp_monitor -c "SELECT current_database(), version();" >/dev/null 2>&1; then
+    echo "✓ 数据库 burp_monitor 可以正常连接"
+    echo ""
+    echo "数据库信息:"
+    docker exec $PG_CONTAINER psql -U postgres -d burp_monitor -c "
+        SELECT 
+            '数据库名称' as info, current_database() as value
+        UNION ALL
+        SELECT '数据库大小', pg_size_pretty(pg_database_size(current_database()))
+        UNION ALL
+        SELECT '表数量', count(*)::text FROM information_schema.tables WHERE table_schema = 'public';
+    " 2>/dev/null || echo "无法获取数据库信息"
+else
+    echo "✗ 数据库 burp_monitor 无法连接！"
+    echo ""
+    echo "请检查以下内容:"
+    echo "1. 容器是否正常运行: docker ps | grep pgsql"
+    echo "2. PostgreSQL日志: docker logs pgsql --tail 50"
+    echo "3. 尝试手动连接: docker exec -it pgsql psql -U postgres -l"
+fi
 
 echo ""
 echo "PostgreSQL部署完成！"
