@@ -173,6 +173,13 @@ The techniques, ideas, and tools mentioned in this document are intended **only*
 -  ✅  Added ability to select fields for CSV export
 -  ✅  Optimized to not force selection of time
 
+### v1.0.8
+-  ✅  Add dictionary extraction
+-  ✅  Optimized overall package size
+
+### v1.0.9
+- ✅ Optimize the identification of whitelist host rules
+
 ## 📄 License
 
 MIT License (see LICENSE).
